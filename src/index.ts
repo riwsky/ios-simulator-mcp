@@ -531,24 +531,41 @@ if (!isToolFiltered("ui_view")) {
       try {
         const actualUdid = await getBootedDeviceId(udid);
 
-        // Get screen dimensions in points from ui_describe_all
-        const { stdout: uiDescribeOutput } = await idb(
-          "ui",
-          "describe-all",
-          "--udid",
-          actualUdid,
-          "--json",
-          "--nested"
-        );
+        // Get screen dimensions in points from ui_describe_all.
+        // Retry because idb occasionally returns {width: 0, height: 0}
+        // during app transitions or simulator startup.
+        let pointWidth = 0;
+        let pointHeight = 0;
+        const maxRetries = 3;
 
-        const uiData = JSON.parse(uiDescribeOutput);
-        const screenFrame = uiData[0]?.frame;
-        if (!screenFrame) {
-          throw new Error("Could not determine screen dimensions");
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+          const { stdout: uiDescribeOutput } = await idb(
+            "ui",
+            "describe-all",
+            "--udid",
+            actualUdid,
+            "--json",
+            "--nested"
+          );
+
+          const uiData = JSON.parse(uiDescribeOutput);
+          const screenFrame = uiData[0]?.frame;
+          if (screenFrame && screenFrame.width > 0 && screenFrame.height > 0) {
+            pointWidth = screenFrame.width;
+            pointHeight = screenFrame.height;
+            break;
+          }
+          if (attempt < maxRetries - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
         }
 
-        const pointWidth = screenFrame.width;
-        const pointHeight = screenFrame.height;
+        if (!pointWidth || !pointHeight) {
+          throw new Error(
+            `Screen dimensions are zero after ${maxRetries} attempts. ` +
+              `The simulator may be loading or in a transitional state.`
+          );
+        }
 
         // Generate unique file names with timestamp
         const ts = Date.now();
